@@ -2,22 +2,18 @@ use std::{thread, time::{Duration, Instant}};
 
 use anyhow::Context;
 use embedded_svc::{
-    http::{Method, Query},
-    wifi::{ClientConfiguration, Configuration}, io::Write,
+    http::{Method, Query}, io::Write,
 };
 use esp_idf_sys as _; // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
-
-use esp_idf_hal::modem::WifiModem;
 use esp_idf_svc::{
-    eventloop::EspEventLoop, http::server, nvs::EspDefaultNvsPartition, wifi::EspWifi,
+    http::server::{self, EspHttpServer},
 };
-use esp_idf_hal::peripherals::Peripherals;
-
+use esp_idf_hal::{peripherals::Peripherals};
 use serde::Deserialize;
-
 use smart_leds::hsv::{hsv2rgb, Hsv};
 
 mod led;
+mod wifi;
 
 #[toml_cfg::toml_config]
 pub struct Config {
@@ -41,40 +37,50 @@ fn main() -> anyhow::Result<()> {
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_sys::link_patches();
 
-    // GETTING WIFI
-    let sysloop = EspEventLoop::take()?;
-    let modem = unsafe { WifiModem::new() };
-    let nvs_defaults = EspDefaultNvsPartition::take()?;
-    let mut wifi = EspWifi::new(modem, sysloop, Some(nvs_defaults))?;
+    // Connecting to wifi
+    let _wifi = wifi::connect(CONFIG.wifi_ssid, CONFIG.wifi_pass)?;
 
-    println!("Wifi created, scanning available networks...");
-
-    let available_networks = wifi.scan()?;
-    let target_network = available_networks
-        .iter()
-        .find(|network| network.ssid == CONFIG.wifi_ssid)
-        .with_context(|| format!("Failed to detect the target network ({})", CONFIG.wifi_ssid))?;
-
-    println!("Scan successfull, found '{}', with config: {target_network:#?}", CONFIG.wifi_ssid);
-
-    wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: CONFIG.wifi_ssid.into(),
-        password: CONFIG.wifi_pass.into(),
-        auth_method: target_network.auth_method,
-        bssid: Some(target_network.bssid),
-        channel: Some(target_network.channel),
-    }))?;
-
-    wifi.start()?;
-    wifi.connect()?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // SETTING UP SERVER
-    println!("Starting web-server...");
+    // Setting up http server
     let server_config = server::Configuration::default();
     let mut server = server::EspHttpServer::new(&server_config)?;
 
+    register_routes(&mut server)?;
+    println!("Server ready, awaiting connections...");
+
+    // Initing led and color
+    let peripherals = Peripherals::take().context("Failed to take peripherals")?;
+    let mut led = led::Led::new(peripherals)?;
+
+    let mut color = Hsv {
+        hue: 0,
+        sat: 255,
+        val: 255,
+    };
+
+    let start = Instant::now();
+
+    // Main loop
+    loop {
+        if let Some(color) = unsafe {&LAST_COLOR} {
+            led.set_rgb(color.r, color.g, color.b)?;
+
+            thread::sleep(Duration::from_millis(1000));
+        }
+        else {
+            let elapsed_secs = start.elapsed().as_millis() as f64 / 1000.;
+            let progress = (elapsed_secs / 5.).fract();
+
+            color.hue = (progress * 255.) as u8;
+
+            let rgb = hsv2rgb(color);
+            led.set_rgb(rgb.r, rgb.g, rgb.b)?;
+
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+fn register_routes(server: &mut EspHttpServer) -> anyhow::Result<()> {
     server.fn_handler("/", Method::Get, |request| {
         let params = request.uri().trim_start_matches("/?");
 
@@ -104,36 +110,5 @@ fn main() -> anyhow::Result<()> {
         Ok(())
     })?;
 
-    println!("Server ready, awaiting connections...");
-
-    // INITING LED AND COLORS
-    let peripherals = Peripherals::take().context("Failed to take peripherals")?;
-    let mut led = led::Led::new(peripherals)?;
-
-    let mut color = Hsv {
-        hue: 0,
-        sat: 255,
-        val: 255,
-    };
-
-    let start = Instant::now();
-
-    loop {
-        if let Some(color) = unsafe {&LAST_COLOR} {
-            led.set_rgb(color.r, color.g, color.b)?;
-
-            thread::sleep(Duration::from_millis(1000));
-        }
-        else {
-            let elapsed_secs = start.elapsed().as_millis() as f64 / 1000.;
-            let progress = (elapsed_secs / 5.).fract();
-
-            color.hue = (progress * 255.) as u8;
-
-            let rgb = hsv2rgb(color);
-            led.set_rgb(rgb.r, rgb.g, rgb.b)?;
-
-            thread::sleep(Duration::from_millis(20));
-        }
-    }
+    Ok(())
 }
