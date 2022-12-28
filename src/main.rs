@@ -63,8 +63,6 @@ fn main() -> anyhow::Result<()> {
     loop {
         if let Some(color) = unsafe {&LAST_COLOR} {
             led.set_rgb(color.r, color.g, color.b)?;
-
-            thread::sleep(Duration::from_millis(1000));
         }
         else {
             let elapsed_secs = start.elapsed().as_millis() as f64 / 1000.;
@@ -74,26 +72,23 @@ fn main() -> anyhow::Result<()> {
 
             let rgb = hsv2rgb(color);
             led.set_rgb(rgb.r, rgb.g, rgb.b)?;
-
-            thread::sleep(Duration::from_millis(20));
         }
+
+        thread::sleep(Duration::from_millis(20));
     }
 }
 
 fn register_routes(server: &mut EspHttpServer) -> anyhow::Result<()> {
-    server.fn_handler("/", Method::Get, |request| {
-        let params = request.uri().trim_start_matches("/?");
-
+    server.fn_handler("/set", Method::Get, |request| {
+        let params = request.uri().trim_start_matches("/set?");
         let qs_color: Color = serde_qs::from_str(params)
             .unwrap_or_default();
 
         unsafe {
             LAST_COLOR = Some(qs_color);
         }
-
-        let mut response = request.into_ok_response()?;
-        let conn = response.connection();
-        conn.write_all("Provide query string params r, g, b to set led color".as_bytes())?;
+            
+        request.into_response(200, None, &[("Access-Control-Allow-Origin", "*")])?;
 
         Ok(())
     })?;
@@ -103,9 +98,7 @@ fn register_routes(server: &mut EspHttpServer) -> anyhow::Result<()> {
             LAST_COLOR = None;
         }
 
-        let mut response = request.into_ok_response()?;
-        let conn = response.connection();
-        conn.write_all("Color set to auto".as_bytes())?;
+        request.into_ok_response()?;
 
         Ok(())
     })?;
