@@ -10,6 +10,7 @@ mod lamp;
 
 use utils::led;
 
+#[derive(Debug)]
 #[toml_cfg::toml_config]
 pub struct Config {
     #[default("")]

@@ -51,15 +51,15 @@ fn register_routes(server: &mut EspHttpServer, led: &Arc<Mutex<Led>>) -> anyhow:
         
         if let Some(hue) = color.hue {
             led.stop_transition();
-            led.set_hue(hue)?;
+            led.set_hue(hue);
         }
 
         if let Some(saturation) = color.saturation {
-            led.set_saturation(saturation)?;
+            led.set_saturation(saturation);
         }
 
         if let Some(value) = color.value {
-            led.set_value(value)?;
+            led.set_value(value);
         }
 
         request.into_response(200, None, &[("Access-Control-Allow-Origin", "*")])?;

@@ -32,20 +32,16 @@ pub fn setup(led: Arc<Mutex<Led>>) -> anyhow::Result<()> {
 
         return lamp::start(credentials, led);
     }
-    println!("No previous credentials found");
 
-    // If not, we will get one from the app
-    let credentials: Credentials = Default::default();
-
-    // Creating wifi access point
+    // If not, we will get one through wifi, for that we create a wifif access point
     let mut wifi = wifi::start_access_point(CONFIG.wifi_ssid, CONFIG.wifi_pass)?;
     let mac_address = wifi.sta_netif().get_mac()?;
     let mac_address_hex = mac_address.map(|byte| format!("{byte:02X}")).join(":");
-    dbg!(&mac_address_hex);
 
-    // Setting up http server
+    // and set up a http server
     let server_config = server::Configuration::default();
     let mut server = server::EspHttpServer::new(&server_config)?;
+    let credentials: Credentials = Default::default();
 
     register_routes(&mut server, &credentials, mac_address_hex)?;
     println!("Setup server ready, awaiting connections");
