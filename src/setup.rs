@@ -9,9 +9,9 @@ use esp_idf_svc::{
 use palette::{rgb::Rgb};
 use serde::{Deserialize, Serialize};
 
-use crate::{CONFIG, utils::{wifi, storage}, lamp, led::Led};
+use crate::{CONFIG, utils::{wifi, storage}, led::Led};
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct WifiCredentials {
     pub ssid: String,
     pub password: String,
@@ -22,15 +22,13 @@ type Credentials = Arc<RwLock<Option<WifiCredentials>>>;
 
 pub const WIFI_NVS_NAME: &str = "wifi_creds";
 
-pub fn setup(led: Arc<Mutex<Led>>) -> anyhow::Result<()> {
+pub fn setup(led: Arc<Mutex<Led>>) -> anyhow::Result<WifiCredentials> {
     let mut storage = storage::new("app", true)?;
         
     // First we check if wifi credentials are already saved from previous setup
-    if let Ok(Some(ref credentials)) = storage.get(WIFI_NVS_NAME) {
+    if let Ok(Some(ref credentials)) = storage.get::<WifiCredentials>(WIFI_NVS_NAME) {
         println!("Found credentials: {credentials:?}");
-        drop(storage);
-
-        return lamp::start(credentials, led);
+        return Ok(credentials.clone());
     }
 
     // If not, we will get one through wifi, for that we create a wifif access point
@@ -60,12 +58,7 @@ pub fn setup(led: Arc<Mutex<Led>>) -> anyhow::Result<()> {
             storage.set(WIFI_NVS_NAME, credentials)
                 .map_err(|err| {dbg!(&err); err}).ok();
 
-            drop(wifi);
-            drop(server);
-            drop(locked_led);
-            drop(storage);
-
-            return lamp::start(credentials, led);
+            return Ok(credentials.clone());
         }
 
         locked_led.tick()?;
@@ -79,12 +72,12 @@ fn register_routes(server: &mut EspHttpServer, credentials: &Credentials, mac_ad
         let params = request.uri().trim_start_matches("/connect?");
         let qs_credentials: WifiCredentials = serde_qs::from_str(params)?;
 
-        *credentials.write()? = Some(qs_credentials);
-        
         let mut response = request.into_ok_response()?;
         response.write_all(mac_address.as_bytes())?;
         response.flush()?;
         response.release();
+        
+        *credentials.write()? = Some(qs_credentials);
 
         Ok(())
     })?;

@@ -1,3 +1,5 @@
+#![feature(result_option_inspect)]
+
 use std::sync::{Mutex, Arc};
 
 use anyhow::Context;
@@ -25,8 +27,8 @@ fn main() -> anyhow::Result<()> {
     esp_idf_sys::link_patches();
 
     let peripherals = Peripherals::take().context("Failed to take peripherals")?;
-    let led = led::Led::new(peripherals)?;
-    let led = Arc::new(Mutex::new(led));
+    let led = Arc::new(Mutex::new(led::Led::new(peripherals)?));
 
-    setup::setup(led)
+    let credentials = setup::setup(led.clone())?;
+    lamp::start(credentials, led)
 }

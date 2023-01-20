@@ -90,6 +90,7 @@ pub struct Led {
     channel_b: LedcDriver<'static>,
     transitions: Vec<Transition>,
     pub color: Hsv,
+    pub is_cycling: bool,
 }
 
 impl Led {
@@ -105,6 +106,7 @@ impl Led {
             channel_b: LedcDriver::new(peripherals.ledc.channel2, &timer, peripherals.pins.gpio2)?,
             transitions: vec![],
             color: Hsv::new(0., 1., 1.),
+            is_cycling: false,
         })
     }
 
@@ -185,6 +187,7 @@ impl Led {
         };
 
         self.transitions.push(transition);
+        self.is_cycling = true;
     }
 
     pub fn pulse(&mut self, duration: Duration) {
