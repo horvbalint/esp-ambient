@@ -1,34 +1,27 @@
 #![feature(result_option_inspect)]
 
-use std::sync::{Mutex, Arc};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
+use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_sys as _; // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
-use esp_idf_hal::{peripherals::Peripherals};
 
-mod utils;
-mod setup;
+use esp32c3_utils::rgb_led;
+
 mod lamp;
-
-use utils::led;
-
-#[derive(Debug)]
-#[toml_cfg::toml_config]
-pub struct Config {
-    #[default("")]
-    wifi_ssid: &'static str,
-    #[default("")]
-    wifi_pass: &'static str,
-}
+mod setup;
 
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_sys::link_patches();
 
-    let peripherals = Peripherals::take().context("Failed to take peripherals")?;
-    let led = Arc::new(Mutex::new(led::Led::new(peripherals)?));
+    let mut peripherals = Peripherals::take().context("Failed to take peripherals")?;
+    let pins = peripherals.pins;
 
-    let credentials = setup::setup(led.clone())?;
-    lamp::start(credentials, led)
+    let led = rgb_led::Led::new(peripherals.ledc, pins.gpio0, pins.gpio1, pins.gpio2)?;
+    let led = Arc::new(Mutex::new(led));
+
+    let credentials = setup::setup(&mut peripherals.modem, led.clone())?;
+    lamp::start(&mut peripherals.modem, credentials, led)
 }

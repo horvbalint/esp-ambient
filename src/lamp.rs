@@ -1,19 +1,30 @@
-use std::{thread, time::Duration, sync::{Arc, Mutex}};
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
 use embedded_svc::{
-    http::{Method, Query}, io::Write,
+    http::{Method, Query},
+    io::Write,
 };
+use esp_idf_hal::modem::WifiModemPeripheral;
 use esp_idf_svc::{
-    http::server::{self, EspHttpServer}, mdns::EspMdns,
+    http::server::{self, EspHttpServer},
+    mdns::EspMdns,
 };
 use palette::rgb::Rgb;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::{setup::WifiCredentials, utils::storage};
-use crate::{utils::wifi, led::Led};
+use crate::setup::WifiCredentials;
+use esp32c3_utils::{rgb_led::Led, storage, wifi};
 
 const CYCLE_DURATION: u64 = 30;
+const HEADERS: [(&str, &str); 2] = [
+    ("Access-Control-Allow-Origin", "*"),
+    ("Access-Control-Allow-Private-Network", "true"),
+];
 
 #[derive(Deserialize, Debug, Default)]
 pub struct Color {
@@ -22,11 +33,15 @@ pub struct Color {
     val: Option<f32>,
 }
 
-pub fn start(credentials: WifiCredentials, led: Arc<Mutex<Led>>) -> anyhow::Result<()> {
+pub fn start(
+    modem: &mut impl WifiModemPeripheral,
+    credentials: WifiCredentials,
+    led: Arc<Mutex<Led>>,
+) -> anyhow::Result<()> {
     println!("Changing into lamp mode");
 
     // Connecting to wifi
-    let _wifi = wifi::connect(&credentials.ssid, &credentials.password)?;
+    let _wifi = wifi::connect(modem, &credentials.ssid, &credentials.password)?;
 
     // Setting up http server
     let server_config = server::Configuration::default();
@@ -42,7 +57,9 @@ pub fn start(credentials: WifiCredentials, led: Arc<Mutex<Led>>) -> anyhow::Resu
     println!("Service advertised using mDNS");
 
     led.lock().unwrap().set_rgb(Rgb::new(1., 0., 0.))?;
-    led.lock().unwrap().cycle_colors(Duration::from_secs(CYCLE_DURATION));
+    led.lock()
+        .unwrap()
+        .cycle_colors(Duration::from_secs(CYCLE_DURATION));
 
     loop {
         led.lock().unwrap().tick()?;
@@ -53,12 +70,12 @@ pub fn start(credentials: WifiCredentials, led: Arc<Mutex<Led>>) -> anyhow::Resu
 
 fn register_routes(server: &mut EspHttpServer, led: &Arc<Mutex<Led>>) -> anyhow::Result<()> {
     let led_clone = led.clone();
-    server.fn_handler("/set", Method::Get, move |request| {
+    server.fn_handler("/set", Method::Post, move |request| {
         let params = request.uri().trim_start_matches("/set?");
         let color: Color = serde_qs::from_str(params).unwrap_or_default();
 
         let mut led = led_clone.lock()?;
-        
+
         if let Some(hue) = color.hue {
             led.is_cycling = false;
             led.stop_transition();
@@ -73,22 +90,18 @@ fn register_routes(server: &mut EspHttpServer, led: &Arc<Mutex<Led>>) -> anyhow:
             led.set_value(val);
         }
 
-        request.into_response(200, None, &[
-            ("Access-Control-Allow-Origin", "*"),
-            ("Access-Control-Allow-Private-Network", "true")
-        ])?;
+        request.into_response(200, None, &HEADERS)?;
 
         Ok(())
     })?;
 
     let led_clone = led.clone();
     server.fn_handler("/cycle", Method::Get, move |request| {
-        led_clone.lock()?.cycle_colors(Duration::from_secs(CYCLE_DURATION));
+        led_clone
+            .lock()?
+            .cycle_colors(Duration::from_secs(CYCLE_DURATION));
 
-        let mut response = request.into_response(200, None, &[
-            ("Access-Control-Allow-Origin", "*"),
-            ("Access-Control-Allow-Private-Network", "true")
-        ])?;
+        let mut response = request.into_response(200, None, &HEADERS)?;
         response.write_all(CYCLE_DURATION.to_string().as_bytes())?;
 
         Ok(())
@@ -96,47 +109,37 @@ fn register_routes(server: &mut EspHttpServer, led: &Arc<Mutex<Led>>) -> anyhow:
 
     let led_clone = led.clone();
     server.fn_handler("/status", Method::Get, move |request| {
-        let mut response = request.into_response(200, None, &[
-            ("Access-Control-Allow-Origin", "*"),
-            ("Access-Control-Allow-Private-Network", "true")
-        ])?;
+        let mut response = request.into_response(200, None, &HEADERS)?;
 
         let led = led_clone.lock()?;
-        if led.is_cycling {
-            let json = json!({
+        let json = if led.is_cycling {
+            json!({
                 "cycling": true,
                 "hue": led.color.hue.to_positive_degrees(),
                 "sat": led.color.saturation,
                 "val": led.color.value,
-                "duration": CYCLE_DURATION, 
-            });
-
-            response.write_all(json.to_string().as_bytes())?;
-        }
-        else {
-            let json = json!({
+                "duration": CYCLE_DURATION,
+            })
+        } else {
+            json!({
                 "cycling": false,
                 "hue": led.color.hue.to_positive_degrees(),
                 "sat": led.color.saturation,
                 "val": led.color.value,
-            });
+            })
+        };
 
-            response.write_all(json.to_string().as_bytes())?;
-        }
-
+        response.write_all(json.to_string().as_bytes())?;
         response.flush()?;
 
         Ok(())
     })?;
 
-    server.fn_handler("/reset", Method::Get, move |request| {
+    server.fn_handler("/reset", Method::Post, move |request| {
         let mut storage = storage::new("app", true)?;
         storage.remove(crate::setup::WIFI_NVS_NAME)?;
 
-        request.into_response(200, None, &[
-            ("Access-Control-Allow-Origin", "*"),
-            ("Access-Control-Allow-Private-Network", "true")
-        ])?;
+        request.into_response(200, None, &HEADERS)?;
 
         // we create a thread that will restart the device after a delay,
         // so that we have a chance to send the answer back to the request

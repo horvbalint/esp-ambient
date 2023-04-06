@@ -1,15 +1,28 @@
-use std::{thread, time::{Duration}, sync::{Arc, Mutex, RwLock}};
+use std::{
+    sync::{Arc, Mutex, RwLock},
+    thread,
+    time::Duration,
+};
 
 use embedded_svc::{
-    http::{Method, Query}, io::Write,
+    http::{Method, Query},
+    io::Write,
 };
-use esp_idf_svc::{
-    http::server::{self, EspHttpServer},
-};
-use palette::{rgb::Rgb};
+use esp_idf_hal::modem::WifiModemPeripheral;
+use esp_idf_svc::http::server::{self, EspHttpServer};
+use palette::rgb::Rgb;
 use serde::{Deserialize, Serialize};
 
-use crate::{CONFIG, utils::{wifi, storage}, led::Led};
+use esp32c3_utils::{rgb_led::Led, storage, wifi};
+
+#[derive(Debug)]
+#[toml_cfg::toml_config]
+pub struct Config {
+    #[default("")]
+    wifi_ssid: &'static str,
+    #[default("")]
+    wifi_pass: &'static str,
+}
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct WifiCredentials {
@@ -19,27 +32,29 @@ pub struct WifiCredentials {
 
 type Credentials = Arc<RwLock<Option<WifiCredentials>>>;
 
-
 pub const WIFI_NVS_NAME: &str = "wifi_creds";
 
-pub fn setup(led: Arc<Mutex<Led>>) -> anyhow::Result<WifiCredentials> {
+pub fn setup(
+    modem: &mut impl WifiModemPeripheral,
+    led: Arc<Mutex<Led>>,
+) -> anyhow::Result<WifiCredentials> {
     let mut storage = storage::new("app", true)?;
-        
+
     // First we check if wifi credentials are already saved from previous setup
     if let Ok(Some(ref credentials)) = storage.get::<WifiCredentials>(WIFI_NVS_NAME) {
         println!("Found credentials: {credentials:?}");
         return Ok(credentials.clone());
     }
 
-    // If not, we will get one through wifi, for that we create a wifif access point
-    let mut wifi = wifi::start_access_point(CONFIG.wifi_ssid, CONFIG.wifi_pass)?;
+    // If not, we will get one through wifi, for that we create a wifi access point
+    let mut wifi = wifi::start_access_point(modem, CONFIG.wifi_ssid, CONFIG.wifi_pass)?;
     let mac_address = wifi.sta_netif().get_mac()?;
     let mac_address_hex = mac_address.map(|byte| format!("{byte:02X}")).join(":");
 
     // and set up a http server
     let server_config = server::Configuration::default();
     let mut server = server::EspHttpServer::new(&server_config)?;
-    let credentials: Credentials = Default::default();
+    let credentials = Credentials::default();
 
     register_routes(&mut server, &credentials, mac_address_hex)?;
     println!("Setup server ready, awaiting connections");
@@ -54,9 +69,8 @@ pub fn setup(led: Arc<Mutex<Led>>) -> anyhow::Result<WifiCredentials> {
 
             locked_led.stop_transition();
             locked_led.set_rgb(Rgb::new(0., 0., 0.))?;
-            
-            storage.set(WIFI_NVS_NAME, credentials)
-                .map_err(|err| {dbg!(&err); err}).ok();
+
+            storage.set(WIFI_NVS_NAME, credentials)?;
 
             return Ok(credentials.clone());
         }
@@ -66,7 +80,11 @@ pub fn setup(led: Arc<Mutex<Led>>) -> anyhow::Result<WifiCredentials> {
     }
 }
 
-fn register_routes(server: &mut EspHttpServer, credentials: &Credentials, mac_address: String) -> anyhow::Result<()> {
+fn register_routes(
+    server: &mut EspHttpServer,
+    credentials: &Credentials,
+    mac_address: String,
+) -> anyhow::Result<()> {
     let credentials = credentials.clone();
     server.fn_handler("/connect", Method::Get, move |request| {
         let params = request.uri().trim_start_matches("/connect?");
@@ -76,7 +94,7 @@ fn register_routes(server: &mut EspHttpServer, credentials: &Credentials, mac_ad
         response.write_all(mac_address.as_bytes())?;
         response.flush()?;
         response.release();
-        
+
         *credentials.write()? = Some(qs_credentials);
 
         Ok(())

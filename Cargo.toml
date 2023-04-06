@@ -18,7 +18,9 @@ opt-level = "z"
 pio = ["esp-idf-sys/pio"]
 
 [dependencies]
-esp32c3 = "0.8.1"
+esp32c3 = "0.13.0"
+# esp32c3_utils = { path = "../esp32c3_utils" }
+esp32c3_utils = { git = "https://github.com/horvbalint/esp32c3_utils.git" }
 esp-idf-sys = { version = "0.32.1", features = ["binstart"] }
 esp-idf-svc = { version = "=0.45.0", features = ["experimental", "alloc"] }
 esp-idf-hal = "0.40.1"
@@ -27,7 +29,7 @@ log = "0.4"
 anyhow = "1"
 toml-cfg = "0.1"
 riscv = { version = "0.10.0" }
-serde_qs = "0.10.1"
+serde_qs = "0.12.0"
 serde = { version = "1.0", features = ["derive"] }
 palette = { version = "0.5.0", default-features = false, features = ["std"] }
 postcard = { version = "1.0.2", features = ["heapless", "heapless-cas", "use-std"] }
